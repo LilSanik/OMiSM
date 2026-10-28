@@ -11,10 +11,10 @@ namespace OMtoSMConverter
     /// Dual-Engine Waveform Offset Detector for osu!mania to StepMania conversion.
     ///
     /// 100% Portable & Self-Contained:
-    ///   - Embedded BASS library: se extrae automáticamente a %TEMP% en tiempo de ejecución.
-    ///   - Pure C# MP3 Inspector: analiza los encabezados MP3/LAME nativamente sin requerir
-    ///     ffmpeg, ffprobe ni ninguna herramienta externa en el sistema.
-    ///   - Zero dependencias externas en la carpeta del ejecutable.
+    ///   - Embedded BASS library: automatically extracted to %TEMP% at runtime.
+    ///   - Pure C# MP3 Inspector: parses MP3/LAME headers natively without requiring
+    ///     ffmpeg, ffprobe or any other external tool.
+    ///   - Zero external dependencies in the executable folder.
     /// </summary>
     internal static class AudioOffsetDetector
     {
@@ -63,7 +63,7 @@ namespace OMtoSMConverter
         // ─── Auto-Extract Embedded BASS ─────────────────────────────────────────
 
         /// <summary>
-        /// Garantiza que bass.dll esté cargado en memoria, extrayéndolo del recurso embebido si es necesario.
+        /// Ensures bass.dll is loaded into memory, extracting it from the embedded resource if needed.
         /// </summary>
         public static void EnsureBassLoaded()
         {
@@ -84,7 +84,7 @@ namespace OMtoSMConverter
                         return;
                     }
 
-                    // Extraer de recursos embebidos a %TEMP%\OMtoSMConverter\bass.dll
+                    // Extract from embedded resources to %TEMP%\OMtoSMConverter\bass.dll
                     string tempDir = Path.Combine(Path.GetTempPath(), "OMtoSMConverter");
                     if (!Directory.Exists(tempDir))
                         Directory.CreateDirectory(tempDir);
@@ -115,19 +115,19 @@ namespace OMtoSMConverter
                 }
                 catch (Exception ex)
                 {
-                    Console.WriteLine("[AudioOffsetDetector] Error cargando bass embebido: " + ex.Message);
+                    Console.WriteLine("[AudioOffsetDetector] Error loading embedded bass: " + ex.Message);
                 }
             }
         }
 
-        // ─── API Pública ─────────────────────────────────────────────────────────
+        // ─── Public API ─────────────────────────────────────────────────────────
 
         /// <summary>
-        /// Calcula el #OFFSET de StepMania ajustado empíricamente a partir del audio.
+        /// Calculates the StepMania #OFFSET empirically adjusted from the audio file.
         /// </summary>
-        /// <param name="audioPath">Ruta al archivo de audio (MP3/OGG).</param>
-        /// <param name="smStartMs">Tiempo de inicio de la Medida 0 en ms (calculado por OMiSM).</param>
-        /// <returns>#OFFSET en segundos (negativo).</returns>
+        /// <param name="audioPath">Path to the audio file (MP3/OGG).</param>
+        /// <param name="smStartMs">Start time of Measure 0 in ms (as computed by OMiSM).</param>
+        /// <returns>#OFFSET in seconds (negative).</returns>
         public static double CalculateSmOffset(string audioPath, double smStartMs)
         {
             try
@@ -144,14 +144,14 @@ namespace OMtoSMConverter
                 Console.WriteLine("[AudioOffsetDetector] Error: " + ex.Message);
             }
 
-            // Fallback: sin corrección
+            // Fallback: no correction available
             return -(smStartMs / 1000.0);
         }
 
-        // ─── Implementación ─────────────────────────────────────────────────────
+        // ─── Implementation ─────────────────────────────────────────────────────
 
         /// <summary>
-        /// Determina el desfase empírico entre la decodificación de osu! (BASS) y StepMania (FFmpeg).
+        /// Determines the empirical lag between osu! (BASS) and StepMania audio decoding.
         /// </summary>
         private static bool TryGetEngineLag(string audioPath, out double lagMs)
         {
@@ -164,7 +164,7 @@ namespace OMtoSMConverter
             string audioExt = Path.GetExtension(audioPath).ToLowerInvariant();
             if (audioExt == ".ogg" || audioExt == ".wav")
             {
-                // Vorbis y WAV son decodificados directamente muestra a muestra sin padding de encoder MP3
+                // Vorbis and WAV are decoded sample-by-sample without any MP3 encoder delay padding
                 lagMs = 0.0;
                 Console.WriteLine(string.Format(CultureInfo.InvariantCulture,
                     "[AudioOffsetDetector] '{0}': Lossless/Vorbis container -> Lag=0.0ms",
@@ -175,14 +175,14 @@ namespace OMtoSMConverter
             int sampleRate = 44100;
             bool hasXing = false;
 
-            // 1. Análisis nativo del contenedor MP3 (sin dependencias externas)
+            // 1. Native MP3 container analysis (no external dependencies)
             if (TryInspectMp3(audioPath, out sampleRate, out hasXing))
             {
-                // Si el audio fue exportado directamente sin Xing/LAME frame (como Kisaragi en FL Studio),
-                // no tiene padding de contenedor: lag = 19 ms.
-                // Si tiene Xing/Info frame (estándar LAME / Lavf con padding de inicio):
-                // - A 48000 Hz: lag = 76 ms (ej. Tiny Bunny).
-                // - A 44100 Hz: lag = 69 ms (ej. Easy Breezy, Witchcraft).
+                // If the audio was exported without a Xing/LAME frame (e.g. Kisaragi exported from FL Studio),
+                // it has no container padding: lag = 19 ms.
+                // If it has a Xing/Info frame (standard LAME / Lavf with encoder delay padding):
+                // - At 48000 Hz: lag = 76 ms (e.g. Tiny Bunny).
+                // - At 44100 Hz: lag = 69 ms (e.g. Easy Breezy, Witchcraft).
                 if (!hasXing)
                 {
                     lagMs = 19.0;
@@ -198,7 +198,7 @@ namespace OMtoSMConverter
                 return true;
             }
 
-            // 2. Si no es MP3 estándar o falló el análisis directo, consultar a BASS embebido
+            // 2. If not standard MP3 or native analysis failed, fall back to embedded BASS
             try
             {
                 BASS_Init(0, 44100, 0, IntPtr.Zero, IntPtr.Zero);
@@ -230,8 +230,8 @@ namespace OMtoSMConverter
         }
 
         /// <summary>
-        /// Parser de cabeceras MP3 en C# puro. Lee ID3v2 synchsafe length, sincroniza el primer frame MPEG
-        /// y detecta presencia del encabezado Xing/Info y la tasa de muestreo.
+        /// Pure C# MP3 header parser. Reads the ID3v2 synchsafe length, syncs to the first MPEG frame
+        /// and detects the presence of a Xing/Info header and the sample rate.
         /// </summary>
         private static bool TryInspectMp3(string audioPath, out int sampleRate, out bool hasXingHeader)
         {
@@ -246,7 +246,7 @@ namespace OMtoSMConverter
                     int read = fs.Read(id3Header, 0, 10);
                     if (read == 10 && id3Header[0] == (byte)'I' && id3Header[1] == (byte)'D' && id3Header[2] == (byte)'3')
                     {
-                        // Synchsafe integer (7 bits por byte)
+                        // Synchsafe integer (7 bits per byte)
                         int size = ((id3Header[6] & 0x7F) << 21) |
                                    ((id3Header[7] & 0x7F) << 14) |
                                    ((id3Header[8] & 0x7F) << 7)  |
@@ -260,12 +260,12 @@ namespace OMtoSMConverter
                         fs.Seek(0, SeekOrigin.Begin);
                     }
 
-                    // Leer hasta 64 KB de datos de audio
+                    // Read up to 64 KB of audio data
                     byte[] buffer = new byte[65536];
                     int bytesRead = fs.Read(buffer, 0, buffer.Length);
                     if (bytesRead < 4) return false;
 
-                    // Buscar palabra de sincronización 0xFFE0
+                    // Scan for sync word 0xFFE0
                     for (int i = 0; i < bytesRead - 4; i++)
                     {
                         if (buffer[i] == 0xFF && (buffer[i + 1] & 0xE0) == 0xE0)
@@ -282,7 +282,7 @@ namespace OMtoSMConverter
                                 int[] rates = { 44100, 48000, 32000, 44100 };
                                 sampleRate = (srIdx < 3) ? rates[srIdx] : 44100;
 
-                                // Escanear el chunk del frame en busca de "Xing" o "Info"
+                                // Scan frame chunk for "Xing" or "Info" token
                                 int frameLen = Math.Min(bytesRead - i, 1500);
                                 for (int j = i; j < i + frameLen - 4; j++)
                                 {
@@ -302,7 +302,7 @@ namespace OMtoSMConverter
             }
             catch (Exception ex)
             {
-                Console.WriteLine("[AudioOffsetDetector] Error en parser MP3 puro: " + ex.Message);
+                Console.WriteLine("[AudioOffsetDetector] Error in native MP3 parser: " + ex.Message);
             }
 
             return false;
