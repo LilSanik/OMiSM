@@ -194,10 +194,21 @@ namespace OMtoSMConverter
         //GUI I/O
         public void boxInform(string progress, bool verbose=false)
         {
-            outBox.Items.Add(progress);
-            int visibleItems = outBox.ClientSize.Height / outBox.ItemHeight;
-            outBox.TopIndex = Math.Max(outBox.Items.Count - visibleItems + 1, 0);
-            outBox.Update();
+            Console.WriteLine(progress);
+            if (outBox != null)
+            {
+                try
+                {
+                    outBox.Items.Add(progress);
+                    if (outBox.ItemHeight > 0)
+                    {
+                        int visibleItems = outBox.ClientSize.Height / outBox.ItemHeight;
+                        outBox.TopIndex = Math.Max(outBox.Items.Count - visibleItems + 1, 0);
+                        outBox.Update();
+                    }
+                }
+                catch { }
+            }
         }
         public void boxInform(params string[] progresses)
         {
