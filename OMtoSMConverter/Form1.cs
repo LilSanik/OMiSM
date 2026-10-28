@@ -353,9 +353,15 @@ namespace OMtoSMConverter
             double MSPB = beatmap.oTimingPoints.First().MSPerBeat;
             double BPMeasure = beatmap.BeatsPerMeasure;
 
-            //80 is what seems to be the difference of osu and stuff
-            HeaderData.Add(smSetting.OFFSET, 
-                ((((MSPB * BPMeasure) - (beatmap.smStartMS + 77 + MSPB * BPMeasure )) / 1000).ToString(numForm))); 
+            // Dynamic offset detection via waveform attack alignment.
+            // Replaces the original hardcoded 77 ms fudge factor with a per-file
+            // acoustic onset measurement using BASS (same library as osu!).
+            // Falls back to the original formula if BASS is unavailable.
+            double timingPointMs = beatmap.oTimingPoints.First().Time;
+            double smOffset = AudioOffsetDetector.CalculateSmOffset(
+                beatmap.audioPath, timingPointMs, beatmap.smStartMS);
+
+            HeaderData.Add(smSetting.OFFSET, smOffset.ToString(numForm));
             HeaderData.Add(smSetting.SAMPLESTART, (
                 (double.Parse(beatmap.oGeneral["PreviewTime"]) >= 0) 
                 ? (double.Parse(beatmap.oGeneral["PreviewTime"]) / 1000).ToString(numForm)
