@@ -359,7 +359,8 @@ namespace OMtoSMConverter
             // Falls back to the original formula if BASS is unavailable.
             double timingPointMs = beatmap.oTimingPoints.First().Time;
             double smOffset = AudioOffsetDetector.CalculateSmOffset(
-                beatmap.audioPath, timingPointMs, beatmap.smStartMS);
+                beatmap.audioPath, timingPointMs, beatmap.smStartMS,
+                System.Linq.Enumerable.Select(beatmap.oHitObjects, h => (double)h.Time));
 
             HeaderData.Add(smSetting.OFFSET, smOffset.ToString(numForm, CultureInfo.InvariantCulture));
             HeaderData.Add(smSetting.SAMPLESTART, (

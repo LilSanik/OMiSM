@@ -1,125 +1,80 @@
 using System;
+using System.Collections.Generic;
+using System.Globalization;
 using System.IO;
 using System.Runtime.InteropServices;
 
 namespace OMtoSMConverter
 {
     /// <summary>
-    /// Detects the precise audio onset offset for StepMania timing correction.
+    /// Dual-Waveform Auto-Alignment for osu! to StepMania conversion.
     ///
-    /// Replaces the hardcoded 77 ms fudge factor in the original OMiSM converter
-    /// with a per-file waveform attack alignment algorithm.
-    ///
-    /// Algorithm (verified against Arrow Vortex Beat 0 placement):
-    ///   1. Decode the MP3 to float PCM using BASS.dll (same library as osu!).
-    ///   2. Locate the first timing point's position in the decoded audio.
-    ///   3. Apply a 3 ms rolling average to smooth the absolute amplitude envelope.
-    ///   4. Find the first sample that crosses 78% of the local maximum (attack onset).
-    ///   5. Add a 10.5 ms calibration constant (perceptual onset + BASS encoder-delay
-    ///      compensation, calibrated against Arrow Vortex on Camellia - Kisaragi).
-    ///   6. The result is the physical beat-0 position in seconds → used as SM OFFSET.
-    ///
-    /// Fallback: if BASS is unavailable, returns the original OMiSM formula value.
+    /// Automatically aligns osu!mania beatmap timing with the StepMania / Arrow Vortex
+    /// audio waveform by comparing the two waveforms via continuous cross-correlation:
+    ///   Waveform 1: StepMania audio waveform (decoded PCM audio onset envelope).
+    ///   Waveform 2: osu! chart waveform (synthesized hit-object pulse train).
+    /// Finds the exact millisecond time shift automatically with ZERO manual intervention.
     /// </summary>
     internal static class AudioOffsetDetector
     {
         // ─── BASS P/Invoke ──────────────────────────────────────────────────────
 
-        private const uint BASS_STREAM_DECODE    = 0x200000;
-        private const uint BASS_SAMPLE_FLOAT     = 0x100;
-        private const uint BASS_UNICODE          = 0x80000000;
+        private const uint BASS_STREAM_DECODE = 0x200000;
+        private const uint BASS_SAMPLE_FLOAT  = 256;
+        private const uint BASS_UNICODE       = 0x80000000;
+
+        private const int SAMPLE_RATE = 44100;
+        private const double READ_SECONDS = 45.0;
 
         [DllImport("bass.dll", CharSet = CharSet.Unicode)]
-        private static extern bool BASS_Init(int device, uint freq, uint flags, IntPtr win, IntPtr clsid);
+        private static extern bool BASS_Init(int device, uint freq, uint flags, IntPtr win, IntPtr dsguid);
 
         [DllImport("bass.dll", CharSet = CharSet.Unicode)]
         private static extern uint BASS_StreamCreateFile(bool mem, string file, ulong offset, ulong length, uint flags);
 
         [DllImport("bass.dll")]
-        private static extern uint BASS_ChannelGetData(uint handle, [Out] float[] buffer, uint length);
+        private static extern uint BASS_ChannelGetData(uint handle, [In, Out] float[] buffer, uint length);
 
         [DllImport("bass.dll")]
         private static extern bool BASS_StreamFree(uint handle);
 
         [DllImport("bass.dll")]
-        private static extern uint BASS_ErrorGetCode();
-
-        // ─── Constants ──────────────────────────────────────────────────────────
-
-        /// <summary>
-        /// Sample rate used for BASS init and calculations.
-        /// </summary>
-        private const int SAMPLE_RATE = 44100;
-
-        /// <summary>
-        /// How many seconds of audio to read (must cover the first timing point).
-        /// </summary>
-        private const double READ_SECONDS = 15.0;
-
-        /// <summary>
-        /// Attack threshold: fraction of local max amplitude at which we declare onset.
-        /// </summary>
-        private const double ATTACK_THRESHOLD = 0.78;
-
-        /// <summary>
-        /// Smoothing window for amplitude envelope in seconds.
-        /// </summary>
-        private const double SMOOTH_WINDOW_SEC = 0.003;
-
-        /// <summary>
-        /// Calibration offset added to the detected attack sample position.
-        /// Accounts for perceptual onset latency and BASS encoder-delay compensation.
-        /// Calibrated on Camellia - Kisaragi (FL Studio LAME, 44100 Hz, 192 kbps)
-        /// against Arrow Vortex Beat 0 visual alignment.
-        /// </summary>
-        private const double CALIBRATION_SEC = 0.0105;
+        private static extern int BASS_ErrorGetCode();
 
         // ─── Public API ─────────────────────────────────────────────────────────
 
         /// <summary>
-        /// Calculate the StepMania #OFFSET value (in seconds, negative) for a given
-        /// osu! beatmap audio file and timing point.
+        /// Calculate the StepMania #OFFSET value using dual-waveform auto-alignment.
         /// </summary>
-        /// <param name="audioPath">Full path to the audio file (MP3/OGG).</param>
-        /// <param name="timingPointMs">
-        ///   osu! timing point time in milliseconds (first uninherited point).
-        /// </param>
-        /// <param name="smStartMs">
-        ///   OMiSM smStartMS — the measure-aligned start time in milliseconds.
-        ///   Used as the fallback when BASS is unavailable.
-        /// </param>
-        /// <returns>SM #OFFSET value in seconds (negative means audio starts before beat 0).</returns>
-        public static double CalculateSmOffset(string audioPath, double timingPointMs, double smStartMs)
+        public static double CalculateSmOffset(
+            string audioPath,
+            double timingPointMs,
+            double smStartMs,
+            IEnumerable<double> hitObjectTimes = null)
         {
-            // Try waveform-based detection first
-            double detectedOffsetSec;
-            if (TryWaveformDetection(audioPath, timingPointMs, out detectedOffsetSec))
+            double shiftMs;
+            if (TryDualWaveformAlignment(audioPath, hitObjectTimes, out shiftMs))
             {
-                // detectedOffsetSec is -physicalBeatSec (where physical beat drops near timingPointMs).
-                // StepMania's Measure 0 starts at smStartMs, which is (timingPointMs - smStartMs) ms earlier.
-                // Therefore, Measure 0 occurs at: physicalBeatSec - ((timingPointMs - smStartMs) / 1000.0)
-                // And SM #OFFSET is the negative of Measure 0 time.
-                double timeDiffSec = (timingPointMs - smStartMs) / 1000.0;
-                double physicalBeatSec = -detectedOffsetSec;
-                double measure0Sec = physicalBeatSec - timeDiffSec;
-                return -measure0Sec;
+                double alignedStartMs = smStartMs + shiftMs;
+                return -(alignedStartMs / 1000.0);
             }
 
-            // Fallback: original OMiSM formula — -(smStartMs) / 1000
-            // (The original had +77 which this detection replaces entirely)
+            // Fallback: unadjusted measure 0 start
             return -(smStartMs / 1000.0);
         }
 
-        // ─── Core Detection ─────────────────────────────────────────────────────
+        // ─── Dual-Waveform Correlation ──────────────────────────────────────────
 
-        private static bool TryWaveformDetection(string audioPath, double timingPointMs, out double smOffsetSec)
+        private static bool TryDualWaveformAlignment(
+            string audioPath,
+            IEnumerable<double> hitObjectTimes,
+            out double shiftMs)
         {
-            smOffsetSec = 0.0;
+            shiftMs = 0.0;
 
             if (!File.Exists(audioPath))
                 return false;
 
-            // Find bass.dll next to the executable
             string exeDir = Path.GetDirectoryName(
                 System.Reflection.Assembly.GetExecutingAssembly().Location) ?? ".";
             string bassPath = Path.Combine(exeDir, "bass.dll");
@@ -129,147 +84,195 @@ namespace OMtoSMConverter
 
             try
             {
-                return TryBassDetection(audioPath, timingPointMs, out smOffsetSec);
-            }
-            catch (Exception ex)
-            {
-                // Log to debug output — non-fatal
-                System.Diagnostics.Debug.WriteLine(string.Format("[AudioOffsetDetector] BASS detection failed: {0}", ex.Message));
-                return false;
-            }
-        }
+                BASS_Init(0, SAMPLE_RATE, 0, IntPtr.Zero, IntPtr.Zero);
+                uint flags = BASS_STREAM_DECODE | BASS_SAMPLE_FLOAT | BASS_UNICODE;
+                uint handle = BASS_StreamCreateFile(false, audioPath, 0, 0, flags);
 
-        private static bool TryBassDetection(string audioPath, double timingPointMs, out double smOffsetSec)
-        {
-            smOffsetSec = 0.0;
+                if (handle == 0)
+                    return false;
 
-            // Initialize BASS (device -1 = no sound output, decode-only mode)
-            BASS_Init(0, SAMPLE_RATE, 0, IntPtr.Zero, IntPtr.Zero);
-
-            uint flags = BASS_STREAM_DECODE | BASS_SAMPLE_FLOAT | BASS_UNICODE;
-            uint handle = BASS_StreamCreateFile(false, audioPath, 0, 0, flags);
-
-            if (handle == 0)
-            {
-                System.Diagnostics.Debug.WriteLine(
-                    string.Format("[AudioOffsetDetector] BASS_StreamCreateFile failed: error {0}", BASS_ErrorGetCode()));
-                return false;
-            }
-
-            try
-            {
-                return DecodeAndDetect(handle, timingPointMs, out smOffsetSec);
-            }
-            finally
-            {
-                BASS_StreamFree(handle);
-            }
-        }
-
-        private static bool DecodeAndDetect(uint handle, double timingPointMs, out double smOffsetSec)
-        {
-            smOffsetSec = 0.0;
-
-            int totalSamples = (int)(READ_SECONDS * SAMPLE_RATE * 2); // stereo
-            float[] buffer = new float[totalSamples];
-
-            uint bytesRead = BASS_ChannelGetData(handle, buffer, (uint)(totalSamples * sizeof(float)));
-            if (bytesRead == 0 || bytesRead == uint.MaxValue)
-                return false;
-
-            int floatsRead = (int)(bytesRead / sizeof(float));
-
-            // Convert stereo to mono
-            int monoSamples = floatsRead / 2;
-            float[] mono = new float[monoSamples];
-            for (int i = 0; i < monoSamples; i++)
-            {
-                int si = i * 2;
-                mono[i] = (si + 1 < floatsRead)
-                    ? (buffer[si] + buffer[si + 1]) * 0.5f
-                    : buffer[si];
-            }
-
-            // Search window: from osu timing point, up to 50 ms ahead
-            double osuSec = timingPointMs / 1000.0;
-            int idxStart = (int)(osuSec * SAMPLE_RATE);
-            int idxEnd   = Math.Min(monoSamples, idxStart + (int)(0.050 * SAMPLE_RATE));
-
-            if (idxStart >= monoSamples || idxStart < 0)
-                return false;
-
-            // Compute absolute amplitude in the window
-            int windowLen = idxEnd - idxStart;
-            float[] absAmp = new float[windowLen];
-            for (int i = 0; i < windowLen; i++)
-                absAmp[i] = Math.Abs(mono[idxStart + i]);
-
-            // 3 ms rolling average (smoothing)
-            int smoothWin = Math.Max(1, (int)(SMOOTH_WINDOW_SEC * SAMPLE_RATE));
-            float[] smooth = RollingAverage(absAmp, smoothWin);
-
-            // Find max
-            float maxVal = 0f;
-            foreach (float s in smooth)
-                if (s > maxVal) maxVal = s;
-
-            if (maxVal < 0.001f)
-                return false;
-
-            // Find first sample at or above 78% of max
-            float thresh = (float)(ATTACK_THRESHOLD * maxVal);
-            int attackIdx = -1;
-            for (int i = 0; i < smooth.Length; i++)
-            {
-                if (smooth[i] >= thresh)
+                try
                 {
-                    attackIdx = i;
-                    break;
+                    int totalSamples = (int)(READ_SECONDS * SAMPLE_RATE * 2);
+                    float[] buffer = new float[totalSamples];
+                    uint bytesRead = BASS_ChannelGetData(handle, buffer, (uint)(totalSamples * sizeof(float)));
+                    if (bytesRead == 0 || bytesRead == uint.MaxValue)
+                        return false;
+
+                    int floatsRead = (int)(bytesRead / sizeof(float));
+                    int monoSamples = floatsRead / 2;
+                    float[] mono = new float[monoSamples];
+                    for (int i = 0; i < monoSamples; i++)
+                    {
+                        int si = i * 2;
+                        mono[i] = (si + 1 < floatsRead) ? (buffer[si] + buffer[si + 1]) * 0.5f : buffer[si];
+                    }
+
+                    // 1. Waveform 1: Audio onset envelope at 1000 Hz (1 ms per frame)
+                    int hop = SAMPLE_RATE / 1000;
+                    int nMs = Math.Min(monoSamples / hop, (int)(READ_SECONDS * 1000));
+                    if (nMs < 1000)
+                        return false;
+
+                    int halfWin = Math.Max(1, (int)(0.0025 * SAMPLE_RATE));
+                    float[] audioEnv = new float[nMs];
+                    for (int i = 0; i < nMs; i++)
+                    {
+                        int center = i * hop;
+                        int s = Math.Max(0, center - halfWin);
+                        int e = Math.Min(monoSamples, center + halfWin);
+                        if (e > s)
+                        {
+                            double sumSq = 0;
+                            for (int j = s; j < e; j++)
+                                sumSq += mono[j] * mono[j];
+                            audioEnv[i] = (float)Math.Sqrt(sumSq / (e - s));
+                        }
+                    }
+
+                    // Onset derivative (rectified positive)
+                    float[] audioOnset = new float[nMs];
+                    for (int i = 1; i < nMs; i++)
+                    {
+                        float diff = audioEnv[i] - audioEnv[i - 1];
+                        audioOnset[i] = diff > 0 ? diff : 0f;
+                    }
+
+                    // 5ms box smoothing
+                    float[] smoothOnset = new float[nMs];
+                    for (int i = 0; i < nMs; i++)
+                    {
+                        float sum = 0;
+                        int cnt = 0;
+                        for (int k = -2; k <= 2; k++)
+                        {
+                            int idx = i + k;
+                            if (idx >= 0 && idx < nMs)
+                            {
+                                sum += audioOnset[idx];
+                                cnt++;
+                            }
+                        }
+                        smoothOnset[i] = cnt > 0 ? sum / cnt : 0;
+                    }
+
+                    // 2. Waveform 2: osu! hit-object pulse train
+                    float[] osuPulse = new float[nMs];
+                    double firstHoTime = 1000.0;
+                    if (hitObjectTimes != null)
+                    {
+                        bool hasFirst = false;
+                        foreach (double t in hitObjectTimes)
+                        {
+                            if (!hasFirst)
+                            {
+                                firstHoTime = t;
+                                hasFirst = true;
+                            }
+                            int tMs = (int)Math.Round(t);
+                            if (tMs >= 0 && tMs < nMs)
+                                osuPulse[tMs] += 1.0f;
+                        }
+                    }
+
+                    // Convolve with 15ms exponential decay transient
+                    float[] osuWaveform = new float[nMs];
+                    int decayLen = 15;
+                    float[] decay = new float[decayLen];
+                    for (int k = 0; k < decayLen; k++)
+                        decay[k] = (float)Math.Exp(-k * (4.0 / decayLen));
+
+                    for (int i = 0; i < nMs; i++)
+                    {
+                        if (osuPulse[i] > 0)
+                        {
+                            float p = osuPulse[i];
+                            for (int k = 0; k < decayLen && (i + k) < nMs; k++)
+                                osuWaveform[i + k] += p * decay[k];
+                        }
+                    }
+
+                    // Active section: from first note up to 30s
+                    int actStart = Math.Max((int)firstHoTime, 500);
+                    int actEnd = Math.Min(actStart + 30000, nMs);
+                    int actLen = actEnd - actStart;
+                    if (actLen <= 1000)
+                        return false;
+
+                    // Normalize sections
+                    double meanA = 0, meanO = 0;
+                    for (int i = 0; i < actLen; i++)
+                    {
+                        meanA += smoothOnset[actStart + i];
+                        meanO += osuWaveform[actStart + i];
+                    }
+                    meanA /= actLen;
+                    meanO /= actLen;
+
+                    double varA = 0, varO = 0;
+                    for (int i = 0; i < actLen; i++)
+                    {
+                        double diffA = smoothOnset[actStart + i] - meanA;
+                        double diffO = osuWaveform[actStart + i] - meanO;
+                        varA += diffA * diffA;
+                        varO += diffO * diffO;
+                    }
+                    double stdA = Math.Sqrt(varA / actLen);
+                    double stdO = Math.Sqrt(varO / actLen);
+
+                    if (stdA < 1e-6 || stdO < 1e-6)
+                        return false;
+
+                    float[] normA = new float[actLen];
+                    float[] normO = new float[actLen];
+                    for (int i = 0; i < actLen; i++)
+                    {
+                        normA[i] = (float)((smoothOnset[actStart + i] - meanA) / stdA);
+                        normO[i] = (float)((osuWaveform[actStart + i] - meanO) / stdO);
+                    }
+
+                    // Cross-correlation in [-60ms, +60ms]
+                    int maxLag = 60;
+                    int bestLag = 0;
+                    double bestScore = double.MinValue;
+
+                    for (int lag = -maxLag; lag <= maxLag; lag++)
+                    {
+                        double score = 0;
+                        int terms = 0;
+                        int iAStart = Math.Max(0, lag);
+                        int iOStart = Math.Max(0, -lag);
+                        int count = actLen - Math.Abs(lag);
+
+                        for (int k = 0; k < count; k++)
+                        {
+                            score += normA[iAStart + k] * normO[iOStart + k];
+                            terms++;
+                        }
+
+                        if (terms > 0)
+                        {
+                            score /= terms;
+                            if (score > bestScore)
+                            {
+                                bestScore = score;
+                                bestLag = lag;
+                            }
+                        }
+                    }
+
+                    shiftMs = bestLag;
+                    return true;
+                }
+                finally
+                {
+                    BASS_StreamFree(handle);
                 }
             }
-
-            if (attackIdx < 0)
+            catch
+            {
                 return false;
-
-            // Physical beat position = osu timing point + attack offset + calibration
-            double physicalBeatSec = osuSec + (attackIdx / (double)SAMPLE_RATE) + CALIBRATION_SEC;
-
-            // SM OFFSET is negative (audio starts before beat 0)
-            smOffsetSec = -physicalBeatSec;
-
-            System.Diagnostics.Debug.WriteLine(
-                string.Format("[AudioOffsetDetector] Detected beat at {0:F6}s -> SM OFFSET = {1:F6}s", physicalBeatSec, smOffsetSec));
-
-            return true;
-        }
-
-        // ─── Helpers ────────────────────────────────────────────────────────────
-
-        private static float[] RollingAverage(float[] input, int windowSize)
-        {
-            float[] output = new float[input.Length];
-            double sum = 0;
-            int count = 0;
-
-            // Build initial window
-            for (int i = 0; i < Math.Min(windowSize, input.Length); i++)
-            {
-                sum += input[i];
-                count++;
             }
-
-            for (int i = 0; i < input.Length; i++)
-            {
-                output[i] = (float)(sum / count);
-
-                // Slide window
-                if (i + windowSize < input.Length)
-                    sum += input[i + windowSize];
-                if (i - windowSize + 1 >= 0 && i + 1 < input.Length)
-                    sum -= input[i - windowSize + 1];
-            }
-
-            return output;
         }
     }
 }
