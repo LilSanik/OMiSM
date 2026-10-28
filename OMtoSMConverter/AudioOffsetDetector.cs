@@ -161,6 +161,17 @@ namespace OMtoSMConverter
 
             EnsureBassLoaded();
 
+            string audioExt = Path.GetExtension(audioPath).ToLowerInvariant();
+            if (audioExt == ".ogg" || audioExt == ".wav")
+            {
+                // Vorbis y WAV son decodificados directamente muestra a muestra sin padding de encoder MP3
+                lagMs = 0.0;
+                Console.WriteLine(string.Format(CultureInfo.InvariantCulture,
+                    "[AudioOffsetDetector] '{0}': Lossless/Vorbis container -> Lag=0.0ms",
+                    Path.GetFileName(audioPath)));
+                return true;
+            }
+
             int sampleRate = 44100;
             bool hasXing = false;
 

@@ -366,9 +366,44 @@ namespace OMtoSMConverter
                 beatmap.smStartMS = startMS;
             }
         }
+        public string GetBestBackground()
+        {
+            if (AllDiffs == null || AllDiffs.Count == 0) return "";
+
+            // Sort diffs by note count descending (difficulty with most notes first)
+            var diffsByNotes = AllDiffs.OrderByDescending(d => d.oHitObjects != null ? d.oHitObjects.Count : 0).ToList();
+
+            // Find the background of the diff with the most notes that actually exists on disk
+            foreach (var diff in diffsByNotes)
+            {
+                string bg = diff.GetBackgroundFilename();
+                if (!string.IsNullOrEmpty(bg))
+                {
+                    if (!string.IsNullOrEmpty(diff.sourcePath) && File.Exists(Path.Combine(diff.sourcePath, bg)))
+                    {
+                        return bg;
+                    }
+                }
+            }
+
+            // If none verified on disk, return the candidate from the diff with most notes
+            foreach (var diff in diffsByNotes)
+            {
+                string bg = diff.GetBackgroundFilename();
+                if (!string.IsNullOrEmpty(bg))
+                    return bg;
+            }
+
+            return "";
+        }
         public void SetHeaderData(int index = 0, bool isPackWithDifferentAudios = false)
         {
             HeaderData = createHeaderData(AllDiffs[index], isPackWithDifferentAudios);
+            string bestBg = GetBestBackground();
+            if (!string.IsNullOrEmpty(bestBg))
+            {
+                HeaderData[smSetting.BACKGROUND] = bestBg;
+            }
         }
 
         //Helpers
@@ -395,20 +430,11 @@ namespace OMtoSMConverter
             HeaderData.Add(smSetting.CREDIT, beatmap.oMetadata["Creator"]);
             HeaderData.Add(smSetting.BANNER, ""); //FIX THIS SOON? Graphics manipulation maybe? How does graphics even work?
 
-            //FIX THIS IN A BIT, this is not proper at all as it is... I mean, it works?
-            string BG;
-            try
-            {
-                BG = beatmap.oEvents[1].parameters[2];
-            }
-            catch
-            {
-                BG = "";                
-            }
+            string BG = beatmap.GetBackgroundFilename();
             HeaderData.Add(smSetting.BACKGROUND, BG); 
             HeaderData.Add(smSetting.LYRICSPATH, ""); 
             HeaderData.Add(smSetting.CDTITLE, ""); //GODDAMMIT, maybe try 
-            HeaderData.Add(smSetting.MUSIC, beatmap.oGeneral["AudioFilename"]);
+            HeaderData.Add(smSetting.MUSIC, beatmap.oGeneral["AudioFilename"].Replace("\"", "").Trim());
             //See Image
             double MSPB = beatmap.oTimingPoints.First().MSPerBeat;
             double BPMeasure = beatmap.BeatsPerMeasure;
@@ -514,7 +540,8 @@ namespace OMtoSMConverter
             //Use the name of the mp3 to separate same-folder different files
             //Oh and clean the unsafe strings
             string fileName = Form1.filenameSanitize(HeaderData[smSetting.TITLE]);
-            string audioName = Form1.filenameSanitize(HeaderData[smSetting.MUSIC]);
+            string audioName = Form1.filenameSanitize(HeaderData[smSetting.MUSIC].Replace("\"", "").Trim());
+            string audioBase = Path.GetFileNameWithoutExtension(audioName);
             string creditName = Form1.filenameSanitize(HeaderData[smSetting.CREDIT]);
 
             //Make new folder
@@ -522,7 +549,7 @@ namespace OMtoSMConverter
                 Form1.dirnameSanitize(
                     (fileName) +
                      " (" +
-                    (Path.GetFileNameWithoutExtension(audioName)) +
+                    (audioBase) +
                      ") [" +
                     (creditName) +
                      "]");
@@ -537,19 +564,71 @@ namespace OMtoSMConverter
             fileWrite.Close();
 
             //Copy mp3 and background
-            string sourcePath = AllDiffs[0].sourcePath + "\\";
-            string bgName = HeaderData[smSetting.BACKGROUND];
+            string sourcePath = AllDiffs[0].sourcePath;
+            string bgName = HeaderData[smSetting.BACKGROUND].Replace("\"", "").Trim();
 
-            try
+            // Copy background safely in its own try/catch
+            if (!string.IsNullOrEmpty(bgName))
             {
-                if (bgName != "") if (!File.Exists(destPath + bgName)) File.Copy(sourcePath + bgName, destPath + bgName, true);
-                if (audioName != "") if (!File.Exists(destPath + audioName)) File.Copy(sourcePath + audioName, destPath + audioName, true);
+                try
+                {
+                    string srcBg = Path.Combine(sourcePath, bgName);
+                    string dstBg = Path.Combine(destPath, bgName);
+                    if (File.Exists(srcBg))
+                    {
+                        if (!File.Exists(dstBg)) File.Copy(srcBg, dstBg, true);
+                    }
+                    else
+                    {
+                        // Try case-insensitive search
+                        string altBg = Directory.GetFiles(sourcePath)
+                            .FirstOrDefault(f => Path.GetFileName(f).Equals(bgName, StringComparison.OrdinalIgnoreCase));
+                        if (altBg != null && !File.Exists(dstBg))
+                        {
+                            File.Copy(altBg, dstBg, true);
+                        }
+                        else
+                        {
+                            parent.boxInform("Background file not found on disk: " + bgName);
+                        }
+                    }
+                }
+                catch (Exception ex)
+                {
+                    parent.boxInform("Could not copy background: " + ex.Message);
+                }
             }
-            catch
+
+            // Copy audio safely in its own try/catch
+            if (!string.IsNullOrEmpty(audioName))
             {
-                //Tell user somehow that files couldn't be copied over?
-                parent.boxInform("Files could not be copied over!");
-                return;
+                try
+                {
+                    string srcAudio = Path.Combine(sourcePath, audioName);
+                    string dstAudio = Path.Combine(destPath, audioName);
+                    if (File.Exists(srcAudio))
+                    {
+                        if (!File.Exists(dstAudio)) File.Copy(srcAudio, dstAudio, true);
+                    }
+                    else
+                    {
+                        // Fallback: look for audio file in sourcePath case-insensitively
+                        string foundAudio = Directory.GetFiles(sourcePath)
+                            .FirstOrDefault(f => Path.GetFileName(f).Equals(audioName, StringComparison.OrdinalIgnoreCase));
+                        if (foundAudio != null && !File.Exists(dstAudio))
+                        {
+                            File.Copy(foundAudio, dstAudio, true);
+                        }
+                        else
+                        {
+                            parent.boxInform("Audio file not found on disk: " + audioName);
+                        }
+                    }
+                }
+                catch (Exception ex)
+                {
+                    parent.boxInform("Could not copy audio: " + ex.Message);
+                }
             }
         }
     }
@@ -638,6 +717,50 @@ namespace OMtoSMConverter
             "", //Find pms header name
             "pump-double"
         };
+
+        public string GetBackgroundFilename()
+        {
+            if (oEvents == null) return "";
+
+            // 1. Look for event type 0 ("0,0,"bg.jpg",0,0")
+            foreach (osuEvent ev in oEvents)
+            {
+                if (ev.parameters == null || ev.parameters.Count < 3) continue;
+                string p0 = ev.parameters[0].Trim();
+                if (p0 == "0" || ev.type == osuEventType._0)
+                {
+                    string candidate = ev.parameters[2].Replace("\"", "").Trim();
+                    if (!string.IsNullOrEmpty(candidate))
+                    {
+                        string ext = Path.GetExtension(candidate).ToLowerInvariant();
+                        if (ext == ".jpg" || ext == ".jpeg" || ext == ".png" || ext == ".bmp")
+                        {
+                            return candidate;
+                        }
+                    }
+                }
+            }
+
+            // 2. Fallback: inspect any event for an existing image file
+            foreach (osuEvent ev in oEvents)
+            {
+                if (ev.parameters == null) continue;
+                foreach (string param in ev.parameters)
+                {
+                    string candidate = param.Replace("\"", "").Trim();
+                    if (string.IsNullOrEmpty(candidate)) continue;
+                    string ext = Path.GetExtension(candidate).ToLowerInvariant();
+                    if (ext == ".jpg" || ext == ".jpeg" || ext == ".png" || ext == ".bmp")
+                    {
+                        if (!string.IsNullOrEmpty(sourcePath) && File.Exists(Path.Combine(sourcePath, candidate)))
+                        {
+                            return candidate;
+                        }
+                    }
+                }
+            }
+            return "";
+        }
 
         //Init
         public Beatmap()
