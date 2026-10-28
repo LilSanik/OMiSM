@@ -94,7 +94,16 @@ namespace OMtoSMConverter
             // Try waveform-based detection first
             double detectedOffsetSec;
             if (TryWaveformDetection(audioPath, timingPointMs, out detectedOffsetSec))
-                return detectedOffsetSec;
+            {
+                // detectedOffsetSec is -physicalBeatSec (where physical beat drops near timingPointMs).
+                // StepMania's Measure 0 starts at smStartMs, which is (timingPointMs - smStartMs) ms earlier.
+                // Therefore, Measure 0 occurs at: physicalBeatSec - ((timingPointMs - smStartMs) / 1000.0)
+                // And SM #OFFSET is the negative of Measure 0 time.
+                double timeDiffSec = (timingPointMs - smStartMs) / 1000.0;
+                double physicalBeatSec = -detectedOffsetSec;
+                double measure0Sec = physicalBeatSec - timeDiffSec;
+                return -measure0Sec;
+            }
 
             // Fallback: original OMiSM formula — -(smStartMs) / 1000
             // (The original had +77 which this detection replaces entirely)

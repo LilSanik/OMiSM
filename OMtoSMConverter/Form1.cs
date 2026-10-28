@@ -361,10 +361,10 @@ namespace OMtoSMConverter
             double smOffset = AudioOffsetDetector.CalculateSmOffset(
                 beatmap.audioPath, timingPointMs, beatmap.smStartMS);
 
-            HeaderData.Add(smSetting.OFFSET, smOffset.ToString(numForm));
+            HeaderData.Add(smSetting.OFFSET, smOffset.ToString(numForm, CultureInfo.InvariantCulture));
             HeaderData.Add(smSetting.SAMPLESTART, (
-                (double.Parse(beatmap.oGeneral["PreviewTime"]) >= 0) 
-                ? (double.Parse(beatmap.oGeneral["PreviewTime"]) / 1000).ToString(numForm)
+                (double.Parse(beatmap.oGeneral["PreviewTime"], CultureInfo.InvariantCulture) >= 0) 
+                ? (double.Parse(beatmap.oGeneral["PreviewTime"], CultureInfo.InvariantCulture) / 1000).ToString(numForm, CultureInfo.InvariantCulture)
                 : "0")); //In case the mapper didn't specify a preview time.
             HeaderData.Add(smSetting.SAMPLELENGTH, "20.000000"); //This is completely arbitrary, try getting length of mp3?
             HeaderData.Add(smSetting.SELECTABLE, "YES");
@@ -659,7 +659,7 @@ namespace OMtoSMConverter
             }
             //File Read Done
             osuFile.Close();
-            placeHold.KeyCountRaw = double.Parse(placeHold.oDifficulty["CircleSize"]);
+            placeHold.KeyCountRaw = double.Parse(placeHold.oDifficulty["CircleSize"], CultureInfo.InvariantCulture);
             placeHold.KeyCount = (int)placeHold.KeyCountRaw;
             placeHold.audioPath = placeHold.sourcePath + "\\" + placeHold.oGeneral["AudioFilename"];
             placeHold.oTimingPoints.Sort((x1, x2) => x1.Time.CompareTo(x2.Time));
@@ -670,14 +670,15 @@ namespace OMtoSMConverter
             //We will make it so it doesn't start too far behind the first note or else we can get weird stuff happening
             try
             {
-                double realStartMS = placeHold.oTimingPoints.First().Time;
-                while (realStartMS <= placeHold.oHitObjects.First().Time)
+                double tpTime = placeHold.oTimingPoints.First().Time;
+                double hoTime = placeHold.oHitObjects.First().Time;
+                double msPerMeasure = placeHold.BeatsPerMeasure * placeHold.oTimingPoints.First().MSPerBeat;
+
+                double realStartMS = tpTime;
+                if (hoTime < tpTime - 1.0)
                 {
-                    realStartMS += placeHold.BeatsPerMeasure * placeHold.oTimingPoints.First().MSPerBeat;
-                }
-                while (realStartMS >= placeHold.oHitObjects.First().Time)
-                {
-                    realStartMS -= placeHold.BeatsPerMeasure * placeHold.oTimingPoints.First().MSPerBeat;
+                    double measuresBack = Math.Ceiling((tpTime - hoTime) / msPerMeasure);
+                    realStartMS = tpTime - measuresBack * msPerMeasure;
                 }
                 placeHold.smStartMS = realStartMS;
             }
@@ -1044,9 +1045,9 @@ namespace OMtoSMConverter
             {
                 if (rawBPMs != "") rawBPMs += Environment.NewLine + ",";
                 rawBPMs += string.Join("", 
-                    (beatnum * BeatsPerMeasure).ToString("0.######"), 
+                    (beatnum * BeatsPerMeasure).ToString("0.######", CultureInfo.InvariantCulture), 
                     "=", 
-                    smBPMs[beatnum].ToString());
+                    smBPMs[beatnum].ToString("0.######", CultureInfo.InvariantCulture));
             }
 
             return rawBPMs;
@@ -1192,8 +1193,8 @@ namespace OMtoSMConverter
                 if (parser.Length != 8)
                     return null;
 
-                TP.Time = double.Parse(parser[0]);
-                TP.MSPerBeat = double.Parse(parser[1]);
+                TP.Time = double.Parse(parser[0], CultureInfo.InvariantCulture);
+                TP.MSPerBeat = double.Parse(parser[1], CultureInfo.InvariantCulture);
                 TP.TimeSig = int.Parse(parser[2]);
                 TP.SType = int.Parse(parser[3]);
                 TP.SSet = int.Parse(parser[4]);
