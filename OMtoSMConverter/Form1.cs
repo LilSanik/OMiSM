@@ -50,13 +50,7 @@ namespace OMtoSMConverter
         //Stuff that happens
         public void processOsuFiles(IEnumerable<string> filepaths)
         {
-            //
-            //<summary>
-            //This program begins the process of converting the files after dropping various files of different kinds into the program.
-            //</summary>
-
-            //Initialize a set of all available mp3 files and to hold files after initial parsint
-            Dictionary<string, HashSet<Beatmap>> allParses = new Dictionary<string, HashSet<Beatmap>>();
+            List<Beatmap> allParsed = new List<Beatmap>();
             int count = 0;
 
             //Parse all dropped files that are osu files
@@ -66,32 +60,36 @@ namespace OMtoSMConverter
                 {
                     Beatmap newParse = Beatmap.getRawOsuFile(filepath);
                     count++;
-
-                    //Then add it to the dictionary for later use
-                    if (allParses.ContainsKey(newParse.audioPath)) allParses[newParse.audioPath].Add(newParse);
-                    else
-                    {
-                        HashSet<Beatmap> newSet = new HashSet<Beatmap>();
-                        newSet.Add(newParse);
-                        allParses.Add(newParse.audioPath, newSet);
-                    }
+                    allParsed.Add(newParse);
                 }
             }
 
-            //Inform user of progress
-            boxInform(string.Format("{0} total osu files found.", count),
-                string.Format("{0} potential Stepmania files may be created.", allParses.Keys.Count()));
+            // Group beatmaps by their mapset folder (sourcePath)
+            var mapGroups = allParsed.GroupBy(b => b.sourcePath);
 
+            boxInform(string.Format("{0} total osu files found.", count));
 
-            //Then we can treat each mp3 as its own smFile
-            foreach (string audioFile in allParses.Keys)
+            foreach (var mapGroup in mapGroups)
             {
-                boxInform("Now processing:", audioFile);
-                createSingleSMFile(allParses[audioFile]);
+                var mapBeatmaps = mapGroup.ToList();
+                bool hasMultipleOsu = mapBeatmaps.Count > 1;
+
+                // Group by audioPath within this mapset
+                var audioGroups = mapBeatmaps.GroupBy(b => b.audioPath).ToList();
+
+                // If this map has multiple .osu files and they do NOT share the same audio file:
+                // treat as a pack with different songs (Title = Version, Subtitle = Map Title)
+                bool isPackWithDifferentAudios = hasMultipleOsu && (audioGroups.Count > 1);
+
+                foreach (var audioGroup in audioGroups)
+                {
+                    boxInform("Now processing:", audioGroup.Key);
+                    createSingleSMFile(audioGroup, isPackWithDifferentAudios);
+                }
             }
             boxInform("All conversions complete!");
         }
-        public void createSingleSMFile(IEnumerable<Beatmap> diffs)
+        public void createSingleSMFile(IEnumerable<Beatmap> diffs, bool isPackWithDifferentAudios = false)
         {
             //Create a new smFile ready to use
             smFile file = new smFile();
@@ -136,7 +134,7 @@ namespace OMtoSMConverter
 
             //Write to file
             boxInform("Exporting the Stepmania files, copying the mp3s might take a while...");
-            file.SetHeaderData();
+            file.SetHeaderData(0, isPackWithDifferentAudios);
             file.writeEverythingToFolder(this);
 
             //Thread fileCopyThread = new Thread(() => file.writeEverythingToFolder());
@@ -368,18 +366,26 @@ namespace OMtoSMConverter
                 beatmap.smStartMS = startMS;
             }
         }
-        public void SetHeaderData(int index = 0)
+        public void SetHeaderData(int index = 0, bool isPackWithDifferentAudios = false)
         {
-            HeaderData = createHeaderData(AllDiffs[index]);
+            HeaderData = createHeaderData(AllDiffs[index], isPackWithDifferentAudios);
         }
 
         //Helpers
-        public static Dictionary<smSetting, string> createHeaderData(Beatmap beatmap)
+        public static Dictionary<smSetting, string> createHeaderData(Beatmap beatmap, bool isPackWithDifferentAudios = false)
         {
             Dictionary<smSetting, string> HeaderData = new Dictionary<smSetting, string>();
             string numForm = "0.######";
-            HeaderData.Add(smSetting.TITLE, beatmap.oMetadata["Title"]);
-            HeaderData.Add(smSetting.SUBTITLE, beatmap.oMetadata["Creator"] + " - " + beatmap.oMetadata["Version"]);
+            if (isPackWithDifferentAudios)
+            {
+                HeaderData.Add(smSetting.TITLE, beatmap.oMetadata["Version"]);
+                HeaderData.Add(smSetting.SUBTITLE, beatmap.oMetadata["Title"]);
+            }
+            else
+            {
+                HeaderData.Add(smSetting.TITLE, beatmap.oMetadata["Title"]);
+                HeaderData.Add(smSetting.SUBTITLE, beatmap.oMetadata["Creator"] + " - " + beatmap.oMetadata["Version"]);
+            }
             HeaderData.Add(smSetting.ARTIST, beatmap.oMetadata["Artist"]);
             HeaderData.Add(smSetting.TITLETRANSLIT, "");
             HeaderData.Add(smSetting.SUBTITLETRANSLIT, "");
@@ -516,7 +522,7 @@ namespace OMtoSMConverter
                 Form1.dirnameSanitize(
                     (fileName) +
                      " (" +
-                    (audioName.Substring(0, audioName.Count() - 4)) +
+                    (Path.GetFileNameWithoutExtension(audioName)) +
                      ") [" +
                     (creditName) +
                      "]");
@@ -604,13 +610,14 @@ namespace OMtoSMConverter
         public string smDiffHeader()
         {
             smDiff diff = (smDiff)smDiffInd;
+            string desc = oMetadata.ContainsKey("Version") ? oMetadata["Version"] : "";
             string thingy = string.Join(Environment.NewLine,
                 "//---------------" + smKeyType() + " - ----------------",
                 "#NOTES:") + 
                 string.Join(Environment.NewLine + "     ",
                 "", 
                 smKeyType() + ":",
-                ":",
+                desc + ":",
                 diff.ToString() + ":",
                 "1:",
                 "",
