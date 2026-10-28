@@ -219,7 +219,7 @@ namespace OMtoSMConverter
         }
         public void beginInstructions()
         {
-            boxInform("Drag and drop a bunch of osu files and folders here!",
+            boxInform("Drag and drop a bunch of .osu / .osz files and folders here!",
             "Press 'e' to clear this status box.",
             "Press 'h' to copy hitsounds");
         }
@@ -243,14 +243,57 @@ namespace OMtoSMConverter
             HashSet<string> outFiles = new HashSet<string>();
             foreach (string path in allDroppedFiles)
             {
-                if (File.Exists(path)) outFiles.Add(path);
+                if (File.Exists(path))
+                {
+                    if (path.EndsWith(".osz", StringComparison.OrdinalIgnoreCase))
+                    {
+                        ExtractOszAndAdd(path, outFiles);
+                    }
+                    else
+                    {
+                        outFiles.Add(path);
+                    }
+                }
                 else if (Directory.Exists(path))
                 {
                     string[] filenames = Directory.GetFiles(path, "*", SearchOption.AllDirectories);
-                    outFiles.UnionWith(filenames);
+                    foreach (string file in filenames)
+                    {
+                        if (file.EndsWith(".osz", StringComparison.OrdinalIgnoreCase))
+                        {
+                            ExtractOszAndAdd(file, outFiles);
+                        }
+                        else
+                        {
+                            outFiles.Add(file);
+                        }
+                    }
                 }
             }
             return outFiles;
+        }
+
+        private void ExtractOszAndAdd(string oszPath, HashSet<string> outFiles)
+        {
+            try
+            {
+                string oszName = Path.GetFileNameWithoutExtension(oszPath);
+                string extractDir = Path.Combine(Path.GetTempPath(), "OMtoSMConverter", "osz", oszName);
+                if (Directory.Exists(extractDir))
+                {
+                    try { Directory.Delete(extractDir, true); } catch { }
+                }
+                Directory.CreateDirectory(extractDir);
+                System.IO.Compression.ZipFile.ExtractToDirectory(oszPath, extractDir);
+
+                boxInform("Extracted .osz: " + Path.GetFileName(oszPath));
+                string[] extractedFiles = Directory.GetFiles(extractDir, "*", SearchOption.AllDirectories);
+                outFiles.UnionWith(extractedFiles);
+            }
+            catch (Exception ex)
+            {
+                boxInform("Error extracting " + Path.GetFileName(oszPath) + ": " + ex.Message);
+            }
         }
         public static string dirnameSanitize(string bad)
         {
