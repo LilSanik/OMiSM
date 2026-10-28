@@ -1,4 +1,4 @@
-﻿namespace OMtoSMConverter
+namespace OMtoSMConverter
 {
     partial class Form1
     {
@@ -54,7 +54,7 @@
             this.Controls.Add(this.outBox);
             this.Icon = ((System.Drawing.Icon)(resources.GetObject("$this.Icon")));
             this.Name = "Form1";
-            this.Text = "BilliumMoto\'s OM to SM Converter";
+            this.Text = "BilliumMoto\'s OM to SM Converter (LilSanik Offset Fix)";
             this.Load += new System.EventHandler(this.Form1_Load);
             this.KeyPress += new System.Windows.Forms.KeyPressEventHandler(this.WinKeyPress);
             this.ResumeLayout(false);
