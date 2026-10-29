@@ -24,9 +24,9 @@ Get the single, portable standalone executable from the Releases page:
 In the original converter, a hardcoded fudge factor was used, which caused charts converted to StepMania / Arrow Vortex to have a perceptible desync (~20 ms to ~76 ms). This fork introduces native, per-file audio lag detection:
 * **MP3 (with Xing/LAME frame)**:
   * At 48,000 Hz: compensates for **+76 ms** (encoder padding + osu! engine latency).
-  * At 44,100 Hz: compensates for **+69 ms** (e.g. *Easy Breezy*, *Witchcraft*).
-* **MP3 (without Xing frame / direct DAW exports)**: compensates for **+19 ms** (e.g. *Kisaragi*).
-* **OGG / Vorbis, WAV & FLAC**: compensates for osu!'s BASS engine baseline playback buffer latency (**+19 ms**), perfectly aligning notes with the audio transients (e.g. *Money Rain*, *courage*).
+  * At 44,100 Hz: compensates for **+69 ms** 
+* **MP3 (without Xing frame / direct DAW exports)**: compensates for **+19 ms** .
+* **OGG / Vorbis, WAV & FLAC**: compensates for osu!'s BASS engine baseline playback buffer latency (**+19 ms**), perfectly aligning notes with the audio transients .
 
 ### 2. Compressed `.osz` Package Support
 * Directly drag and drop `.osz` beatmap files into the window. The application automatically unpacks and processes them.
