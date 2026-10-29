@@ -162,13 +162,16 @@ namespace OMtoSMConverter
             EnsureBassLoaded();
 
             string audioExt = Path.GetExtension(audioPath).ToLowerInvariant();
-            if (audioExt == ".ogg" || audioExt == ".wav")
+            if (audioExt == ".ogg" || audioExt == ".wav" || audioExt == ".flac")
             {
-                // Vorbis and WAV are decoded sample-by-sample without any MP3 encoder delay padding
-                lagMs = 0.0;
+                // Vorbis, FLAC and WAV contain no MP3 encoder delay padding in their headers.
+                // However, osu!'s audio engine (BASS) introduces an intrinsic ~19ms playback latency,
+                // meaning that timing points authored in osu! have a 19ms baseline shift relative
+                // to StepMania / Arrow Vortex decoders.
+                lagMs = 19.0;
                 Console.WriteLine(string.Format(CultureInfo.InvariantCulture,
-                    "[AudioOffsetDetector] '{0}': Lossless/Vorbis container -> Lag=0.0ms",
-                    Path.GetFileName(audioPath)));
+                    "[AudioOffsetDetector] '{0}': Container ({1}) -> Baseline Lag=19.0ms",
+                    Path.GetFileName(audioPath), audioExt));
                 return true;
             }
 
